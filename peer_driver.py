@@ -88,11 +88,13 @@ class PeerDriver:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        await asyncio.sleep(2)
+
         # check socket file
         if not os.path.exists(self.socket_path):
-            return False, 'Expect socket file {} but not found'.format(self.socket_path)
+            return 'Expect socket file {} but not found'.format(self.socket_path)
 
-        return True, None
+        return None
 
     async def kill(self):
         self.logger.debug('Kill peer "%s" process', self.name)
@@ -107,7 +109,6 @@ class PeerDriver:
             os.unlink(self.socket_path)
 
     async def send_exit(self, timeout=30.0):
-        self.logger.debug('Send exit command')
         assert self.proc is not None, 'Process is not started on send_exit()'
 
         try:
@@ -135,7 +136,6 @@ class PeerDriver:
             return False, 'Peer process does not terminate in {} seconds after exit command'.format(timeout)
 
     async def send_list(self):
-        self.logger.debug('Send list command')
         assert self.proc is not None, 'Process is not started on list()'
 
         try:
@@ -159,7 +159,6 @@ class PeerDriver:
         return None, None
 
     async def send_histoy(self, all_option):
-        self.logger.debug('Send history command')
         assert self.proc is not None, 'Process is not started on send_history()'
 
         try:
@@ -181,14 +180,12 @@ class PeerDriver:
         return self.parse_history_output(result)
 
     async def send_cp(self, source, target):
-        self.logger.debug('Send cp %s %s command', source, target)
-
         assert self.proc is not None, 'Process is not started on send_cp()'
-        assert source[0] == '@' or os.path.isfile(source), 'Malformed source path'
-        assert target[0] == '@' or os.path.isdir(os.path.dirname(target)), 'Malformed target path'
+        assert isinstance(source, bytes) and isinstance(target, bytes)
+        assert target[0] == ord('@') or os.path.isdir(os.path.dirname(os.path.realpath(target))), 'Malformed target path'
 
         try:
-            command = bytes('cp {} {}\n'.format(source, target), 'ASCII')
+            command = b'cp %s %s\n' % (source, target)
             self.logger.info('stdin: %s', command)
 
             self.proc.stdin.write(command)
@@ -211,14 +208,11 @@ class PeerDriver:
         return None, 'Output {} is not understood'.format(result)
 
     async def send_mv(self, source, target):
-        self.logger.debug('Send mv %s %s command', source, target)
-
         assert self.proc is not None, 'Process is not started on send_mv()'
-        assert source[0] == '@' or os.path.isfile(source)
-        assert target[0] == '@' or os.path.isfile(target)
+        assert isinstance(source, bytes) and isinstance(target, bytes)
 
         try:
-            command = bytes('mv {} {}\n'.format(source, target), 'ASCII')
+            command = b'mv %s %s\n' % (source, target)
             self.logger.info('stdin: %s', command)
 
             self.proc.stdin.write(command)
@@ -332,7 +326,7 @@ class PeerDriver:
                 return False, 'Some MD5 hash is missing'
 
             if commit_list and commit_list[-1]['timestamp'] > commit['timestamp']:
-                return False, 'Commits are not orderd by timestamp correctly'
+                return False, 'Commits are not ordered by timestamp correctly'
 
             return True, None
 
@@ -423,6 +417,11 @@ class PeerDriver:
 
             elif state == ParserState.MD5_SECTION:
                 if line == b'(timestamp)\n':
+
+                    # verify every entry in [new_file] and [modified] has a MD5
+                    if None in curr_commit['new_file'] or None in curr_commit['modified']:
+                        return None, 'Some entry in [new_file] or [modified] does not have corresponding MD5'
+
                     state = ParserState.TIMESTAMP_SECTION
                 else:
                     tokens = line[:-1].split()

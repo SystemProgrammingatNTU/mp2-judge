@@ -2,8 +2,7 @@
 import os
 import csv
 import argparse
-import datetime
-import multiprocessing as mp
+import asyncio
 import logging
 import pathlib
 import traceback
@@ -13,7 +12,7 @@ import coloredlogs
 from mp2_test import Mp2Test, Status, Comment
 
 
-def main():
+async def main():
     # compute default paths
     default_tmp_dir = os.path.join(
         os.path.dirname(os.path.realpath(__file__)),
@@ -55,7 +54,7 @@ def main():
         account_list = list(map(lambda row: (row[0].upper(), row[1]), reader))
 
     # start process pool
-    def make_judge_arg(row):
+    def make_judge_corotine(row):
         student_id = row[0]
         github_account = row[1]
         repo_dir =  os.path.join(
@@ -63,18 +62,14 @@ def main():
             'SP18-{}'.format(row[0]),
         )
         log_dir = os.path.realpath(args.log_dir)
-        return (student_id, github_account, repo_dir, log_dir, args.log_level, args.tmp_dir, not args.keep_tmp_files)
+        return judge((student_id, github_account, repo_dir, log_dir, args.log_level, args.tmp_dir, not args.keep_tmp_files))
 
-    judge_args = map(make_judge_arg, account_list)
+    corotine_gen = map(make_judge_corotine, account_list)
 
-    with mp.Pool() as pool:
-        gen_results = pool.imap_unordered(judge, judge_args)
-
-        for result in gen_results:
-            student_id, context = result
+    await asyncio.gather(*corotine_gen)
 
 
-def judge(args):
+async def judge(args):
     student_id, github_account, repo_dir, log_dir, log_level, tmp_dir, auto_clean_tmp = args
 
     # setup logger
@@ -90,28 +85,78 @@ def judge(args):
 
     context = {
         'status': None,
-        'comment': None,
-        'score': None,
-        'error': None,
+        'comment': dict(),
+        'error': dict(),
+        'score': 0,
     }
 
     try:
         tester = Mp2Test(student_id, github_account, repo_dir, logger=logger, tmp_dir=tmp_dir, auto_clean_tmp=auto_clean_tmp)
 
-        # early bonus test
-        status, comment, error = tester.early_bonus_test(due_date=None)
+        # test history and list copy
+        test_name = 'simple_history_list_test'
+        status, comment, error = await tester.simple_history_list_test()
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
 
-        if status == Status.OK and comment == Comment.PASS:
-            context['score'] = 3
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 3
 
-        context['status'] = status
-        context['comment'] = comment
-        context['error'] = error
+        # test local/repo transfer
+        test_name = 'simple_local_repo_test'
+        status, comment, error = await tester.simple_local_repo_test()
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 0.5
+
+        # test remote file transfer
+        test_name = 'simple_remote_transfer_test'
+        status, comment, error = await tester.simple_remote_transfer_test()
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 0.5
+
+        # check if history/list is updated in 0.5 seconds
+        test_name = 'log_update_test'
+        status, comment, error = await tester.log_update_test()
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 0.5
+
+        # all test pass if reaching here
+        context['status'] = Status.OK
 
     except Exception as err:
         context['status'] = Status.ERROR
-        context['comment'] = Comment.EXCEPTION_RAISED
+        context['comment'] = Comment.EXCEPTION_RAISED.value
         context['error'] = err
+        context['score'] = None
         traceback.print_exc()
     finally:
         # assersions
@@ -120,12 +165,10 @@ def judge(args):
 
         # write log
         logger.info('status=%s', context['status'].value)
-        logger.info('comment=%s', context['comment'].value)
-        logger.info('score=%s', context['score'])
+        logger.info('comment=%s', context['comment'])
         logger.info('error=%s', context['error'])
-
-        return student_id, context
+        logger.info('score=%s', context['score'])
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

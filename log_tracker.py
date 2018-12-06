@@ -217,10 +217,6 @@ class LogTracker:
         expected_view = self.combined_log.get_logical_view()
         return expected_view == proposed_view
 
-    def verify_history(self, name, proposed_history):
-        expected_history = self.log_table[name]
-        return proposed_history[:len(expected_history)] == expected_history
-
     def verify_combined_history(self, proposed_history):
         expected_history = self.combined_log.get_combined_history()
         return proposed_history == expected_history
