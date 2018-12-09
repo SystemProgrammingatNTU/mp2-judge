@@ -6,7 +6,7 @@ import asyncio
 import logging
 import pathlib
 import traceback
-
+import datetime
 
 import coloredlogs
 from mp2_test import Mp2Test, Status, Comment
@@ -32,6 +32,7 @@ async def main():
     arg_parser.add_argument('--log-level', default='INFO')
     arg_parser.add_argument('--tmp-dir', default=default_tmp_dir)
     arg_parser.add_argument('--keep-tmp-files', action='store_true')
+    arg_parser.add_argument('--due-date', default='2018-12-11T23:59')
     args = arg_parser.parse_args()
 
     # make sure temp dir exists
@@ -54,6 +55,8 @@ async def main():
         account_list = list(map(lambda row: (row[0].upper(), row[1]), reader))
 
     # start process pool
+    due_date = datetime.datetime.fromisoformat(args.due_date)
+
     def make_judge_corotine(row):
         student_id = row[0]
         github_account = row[1]
@@ -62,7 +65,7 @@ async def main():
             'SP18-{}'.format(row[0]),
         )
         log_dir = os.path.realpath(args.log_dir)
-        return judge((student_id, github_account, repo_dir, log_dir, args.log_level, args.tmp_dir, not args.keep_tmp_files))
+        return judge((student_id, github_account, repo_dir, log_dir, args.log_level, args.tmp_dir, due_date, not args.keep_tmp_files))
 
     corotine_gen = map(make_judge_corotine, account_list)
 
@@ -70,7 +73,7 @@ async def main():
 
 
 async def judge(args):
-    student_id, github_account, repo_dir, log_dir, log_level, tmp_dir, auto_clean_tmp = args
+    student_id, github_account, repo_dir, log_dir, log_level, tmp_dir, due_date, auto_clean_tmp = args
 
     # setup logger
     log_file = os.path.join(log_dir, '{}.log'.format(student_id))
@@ -95,7 +98,7 @@ async def judge(args):
 
         # test history and list copy
         test_name = 'simple_history_list_test'
-        status, comment, error = await tester.simple_history_list_test()
+        status, comment, error = await tester.simple_history_list_test(due_date=due_date)
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
@@ -109,7 +112,7 @@ async def judge(args):
 
         # test local/repo transfer
         test_name = 'simple_local_repo_test'
-        status, comment, error = await tester.simple_local_repo_test()
+        status, comment, error = await tester.simple_local_repo_test(due_date=due_date)
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
@@ -123,7 +126,7 @@ async def judge(args):
 
         # test remote file transfer
         test_name = 'simple_remote_transfer_test'
-        status, comment, error = await tester.simple_remote_transfer_test()
+        status, comment, error = await tester.simple_remote_transfer_test(due_date=due_date)
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
@@ -137,7 +140,7 @@ async def judge(args):
 
         # check if history/list is updated in 0.5 seconds
         test_name = 'log_update_test'
-        status, comment, error = await tester.log_update_test()
+        status, comment, error = await tester.log_update_test(due_date=due_date)
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
