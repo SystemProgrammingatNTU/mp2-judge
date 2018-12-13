@@ -1,10 +1,11 @@
 import os
 import asyncio
-import subprocess
+import random
 from enum import Enum
 import tempfile
 import hashlib
 import datetime
+import string
 from collections import OrderedDict
 
 from peer_driver import PeerDriver
@@ -24,9 +25,11 @@ class Comment(Enum):
     NOT_SUBMITTED = 'Homework is not submitted'
     PASS = 'Pass'
     TEST_FAILED = 'Test failed'
+    MULTIPLE = 'Multiple errors'
 
 
 class TestAction(Enum):
+    COMPOUND = 1
     VERIFY_LIST = 2
     VERIFY_HISTORY = 3
     VERIFY_COMBINED_HISTORY = 4
@@ -53,6 +56,7 @@ class Mp2Test:
         self.logger = logger.getChild('Mp2Test')
         self.score = None
         self.is_clean_repo = False
+        self.peer_name_charset = list(set(string.printable) - set(string.whitespace) - set(string.punctuation))
 
         os.chdir(repo_dir)
 
@@ -222,6 +226,80 @@ class Mp2Test:
                 (TestAction.SLEEP, 1),
 
                 (TestAction.VERIFY_FILE, (b'target.bin', b'#source.bin')),
+            ]
+        )
+
+    async def hard_remote_transfer_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+        n_peers = 5
+
+        while True:
+            peer_names = {n: self.make_random_peer_name() for n in range(n_peers)}
+            all_peers = list(peer_names.values())
+
+            if n_peers == len(set(all_peers)):
+                break
+
+        random_source_files = list(
+            [b'source_%d' % n, random.randint(2 ** 10, 2 ** 11)]
+            for n in range(n_peers)
+        )
+        random_source_files[0][1] = 2**11  # at least one peer has 2GB file
+
+        register_file_actions = list(
+            (TestAction.REGISTER_TEST_FILE, fname, None, size)
+            for fname, size in random_source_files
+        )
+
+        first_mv_args = list(
+            (peer_names[ind], fname, b'@source_%d_1' % ind, True)
+            for ind, (fname, size) in enumerate(random_source_files)
+        )
+        first_list_answer = {
+            b'@source_%d_1' % ind: b'#%s' % fname
+            for ind, (fname, size) in enumerate(random_source_files)
+        }
+
+        second_cp_args = list(
+            (peer_names[ind], b'@source_%d_1' % ind, b'@source_%d_2' % ind, True)
+            for ind, (fname, size) in enumerate(random_source_files)
+        )
+        second_partial_list_answer = {
+            b'@source_%d_2' % ind: b'#%s' % fname
+            for ind, (fname, size) in enumerate(random_source_files)
+        }
+        second_list_answer = {*first_list_answer, *second_partial_list_answer}
+
+        third_cp_args = list(
+            (peer_names[ind], b'@source_%d_2' % ((ind + 1) % n_peers), b'target_%d_1' % ind, True)
+            for ind, (fname, size) in enumerate(random_source_files)
+        )
+
+        forth_mv_args = list(
+            (peer_names[ind], b'@source_%d_1' % ((ind + n_peers - 1) % n_peers), b'target_%d_2' % ind, True)
+            for ind, (fname, size) in enumerate(random_source_files)
+        )
+
+        return await self.run_script(
+            'hard_remote_transfer_test',
+            due_date,
+            all_peers,
+            [
+                (TestAction.COMPOUND, *register_file_actions),
+                (TestAction.START_PEER, all_peers),
+                (TestAction.VERIFY_LIST, dict(), all_peers),
+
+                (TestAction.RUN_MV, first_mv_args),
+                (TestAction.SLEEP, 1),
+                (TestAction.VERIFY_LIST, first_list_answer, all_peers),
+
+                (TestAction.RUN_CP, second_cp_args),
+                (TestAction.SLEEP, 1),
+                (TestAction.VERIFY_LIST, second_list_answer, all_peers),
+
+                (TestAction.RUN_MV, third_cp_args),
+                (TestAction.RUN_MV, forth_mv_args),
+
+                # (TestAction.VERIFY_FILE, (b'target.bin', b'#source.bin')),
             ]
         )
 
@@ -598,9 +676,21 @@ class Mp2Test:
                 drivers[name] = peer
 
             # run script
-            for command in script:
+            async def handle_command(command):
                 action = command[0]
                 args = command[1:]
+
+                if action == TestAction.COMPOUND:
+                    results = await asyncio.gather(
+                        *(handle_command(cmd) for cmd in args)
+                    )
+                    error_results = list(filter(lambda ret: ret is not None, results))
+
+                    if error_results:
+                        errors = list(ret[2] for ret in error_results)
+                        return Status.ERROR, Comment.MULTIPLE, errors
+
+                    return
 
                 if action == TestAction.VERIFY_LIST:
                     ret = await process_verify_list(args)
@@ -632,6 +722,11 @@ class Mp2Test:
                 if ret is not None:
                     return ret
 
+            for command in script:
+                ret = await handle_command(command)
+                if ret is not None:
+                    return ret
+
             return Status.OK, Comment.PASS, None
 
         finally:
@@ -642,3 +737,7 @@ class Mp2Test:
 
             if self.auto_clean_tmp:
                 test_dir.cleanup()
+
+    def make_random_peer_name(self):
+        suffix = ''.join(random.choices(self.peer_name_charset, k=16))
+        return '{}-{}'.format(self.student_id, suffix)

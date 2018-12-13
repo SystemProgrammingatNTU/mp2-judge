@@ -102,8 +102,8 @@ async def judge(args):
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
-        if status == Status.ERROR:
-            context['status'] = Status.ERROR
+        if status != Status.OK:
+            context['status'] = status
             return
         else:
             assert status == Status.OK
@@ -130,8 +130,8 @@ async def judge(args):
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
-        if status == Status.ERROR:
-            context['status'] = Status.ERROR
+        if status != Status.OK:
+            context['status'] = status
             return
         else:
             assert status == Status.OK
@@ -146,6 +146,23 @@ async def judge(args):
 
         if status == Status.ERROR:
             context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 0.5
+
+        # all test pass if reaching here
+        context['status'] = Status.OK
+
+        # test large file remove transfer
+        test_name = 'hard_remote_transfer_test'
+        status, comment, error = await tester.hard_remote_transfer_test(due_date=due_date)
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status != Status.OK:
+            context['status'] = status
             return
         else:
             assert status == Status.OK

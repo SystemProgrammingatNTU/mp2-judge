@@ -3,6 +3,7 @@ import re
 import tempfile
 import asyncio
 import logging
+import errno
 from enum import Enum
 
 from log_tracker import LogTracker
@@ -66,7 +67,12 @@ class PeerDriver:
     def __del__(self):
         if self.proc is not None:
             if self.proc.returncode is None:
-                self.proc.kill()
+                try:
+                    self.proc.kill()
+                except OSError as err:
+                    if err.errno != errno.ESRCH:
+                        raise err
+
             self.proc = None
 
         self.config_file.close()
@@ -85,7 +91,7 @@ class PeerDriver:
             self.config_file_path,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=None,
         )
 
         await asyncio.sleep(2)
@@ -179,7 +185,7 @@ class PeerDriver:
 
         return self.parse_history_output(result)
 
-    async def send_cp(self, source, target):
+    async def send_cp(self, source, target, timeout=30.0):
         assert self.proc is not None, 'Process is not started on send_cp()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
         assert target[0] == ord('@') or os.path.isdir(os.path.dirname(os.path.realpath(target))), 'Malformed target path'
@@ -191,7 +197,7 @@ class PeerDriver:
             self.proc.stdin.write(command)
             await self.proc.stdin.drain()
 
-            result, err = await self.scan_stdout()
+            result, err = await self.scan_stdout(timeout=timeout, expect_n_lines=1)
             if err is not None:
                 return None, err
 
@@ -207,7 +213,7 @@ class PeerDriver:
 
         return None, 'Output {} is not understood'.format(result)
 
-    async def send_mv(self, source, target):
+    async def send_mv(self, source, target, timeout=30.0):
         assert self.proc is not None, 'Process is not started on send_mv()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
 
@@ -218,7 +224,7 @@ class PeerDriver:
             self.proc.stdin.write(command)
             await self.proc.stdin.drain()
 
-            result, err = await self.scan_stdout()
+            result, err = await self.scan_stdout(timeout=timeout, expect_n_lines=1)
             if err is not None:
                 return None, err
 
@@ -234,28 +240,30 @@ class PeerDriver:
 
         return None, 'Output {} is not understood'.format(result)
 
-    async def scan_stdout(self, timeout=3.0):
+    async def scan_stdout(self, timeout=3.0, expect_n_lines=None):
         assert self.proc is not None
+        assert expect_n_lines is None or isinstance(expect_n_lines, int)
 
         result = list()
 
-        try:
-            while True:
+        while expect_n_lines is None or len(result) < expect_n_lines:
+            try:
                 line = await asyncio.wait_for(self.proc.stdout.readline(), timeout)
+            except asyncio.TimeoutError:
+                return result, None
 
-                if not line or line[-1] != ord('\n'):  # EOF case
-                    if line:
-                        self.logger.info('stdout: %s', line)
-                        result.append(line)
+            if not line or line[-1] != ord('\n'):  # EOF case
+                if line:
+                    self.logger.info('stdout: %s', line)
+                    result.append(line)
 
-                    self.logger.info('Receiv early EOF from %s peer stdout', self.name)
-                    return result, 'Receiv early EOF in stdout'
+                self.logger.info('Receiv early EOF from %s peer stdout', self.name)
+                return result, 'Receiv early EOF in stdout'
 
-                result.append(line)
-                self.logger.info('stdout: %s', line)
+            result.append(line)
+            self.logger.info('stdout: %s', line)
 
-        except asyncio.TimeoutError:
-            return result, None
+        return result, None
 
     def parse_list_output(self, result):
         # parse list output
