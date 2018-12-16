@@ -42,6 +42,7 @@ class TestAction(Enum):
     KILL_PEER = 11
     REGISTER_TEST_FILE = 12
     UNREGISTER_TEST_FILE = 13
+    RUN_RM = 14
 
 
 class Mp2Test:
@@ -206,6 +207,50 @@ class Mp2Test:
             ]
         )
 
+    async def simple_rm_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+        resol_name = '{}-resol'.format(self.student_id)
+        reep_name = '{}-reep'.format(self.student_id)
+        all_peers = [resol_name, reep_name]
+
+        return await self.run_script(
+            'simple_rm_test',
+            due_date,
+            all_peers,
+            [
+                (TestAction.REGISTER_TEST_FILE, b'source_resol', None, 8192),
+                (TestAction.REGISTER_TEST_FILE, b'source_reep', None, 8192),
+                (TestAction.START_PEER, all_peers),
+
+                (TestAction.RUN_MV, [(resol_name, b'source_resol', b'@resol.file', True)]),
+                (TestAction.SLEEP, 1),
+
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, {b'resol.file': b'#source_resol'}, all_peers),
+
+                (TestAction.RUN_MV, [(reep_name, b'source_reep', b'@reep.file', True)]),
+                (TestAction.SLEEP, 1),
+
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, {b'resol.file': b'#source_resol', b'reep.file': b'#source_reep'}, all_peers),
+
+                (TestAction.RUN_RM, [(reep_name, b'@resol.file')]),
+                (TestAction.SLEEP, 1),
+
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, {b'reep.file': b'#source_reep'}, all_peers),
+
+                (TestAction.RUN_RM, [(resol_name, b'@reep.file')]),
+                (TestAction.SLEEP, 1),
+
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, dict(), all_peers),
+            ]
+        )
+
     async def simple_remote_transfer_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
         resol_name = '{}-resol'.format(self.student_id)
         reep_name = '{}-reep'.format(self.student_id)
@@ -233,50 +278,36 @@ class Mp2Test:
         n_peers = 5
 
         while True:
-            peer_names = {n: self.make_random_peer_name() for n in range(n_peers)}
+            peer_names = {n: 'peer_%d' % n for n in range(n_peers)}
             all_peers = list(peer_names.values())
 
             if n_peers == len(set(all_peers)):
                 break
 
-        random_source_files = list(
-            [b'source_%d' % n, random.randint(2 ** 10, 2 ** 11)]
+        source_files = list(
+            [b'source_%d' % n, random.randint(2 ** 24, 2 ** 26)]
             for n in range(n_peers)
         )
-        random_source_files[0][1] = 2**11  # at least one peer has 2GB file
+        source_files[0][1] = 2 ** 30  # at least one peer has 1GB file
 
         register_file_actions = list(
             (TestAction.REGISTER_TEST_FILE, fname, None, size)
-            for fname, size in random_source_files
+            for fname, size in source_files
         )
 
         first_mv_args = list(
-            (peer_names[ind], fname, b'@source_%d_1' % ind, True)
-            for ind, (fname, size) in enumerate(random_source_files)
+            (peer_names[ind], fname, b'@data_%d' % ind, True)
+            for ind, (fname, size) in enumerate(source_files)
         )
-        first_list_answer = {
-            b'@source_%d_1' % ind: b'#%s' % fname
-            for ind, (fname, size) in enumerate(random_source_files)
-        }
 
         second_cp_args = list(
-            (peer_names[ind], b'@source_%d_1' % ind, b'@source_%d_2' % ind, True)
-            for ind, (fname, size) in enumerate(random_source_files)
-        )
-        second_partial_list_answer = {
-            b'@source_%d_2' % ind: b'#%s' % fname
-            for ind, (fname, size) in enumerate(random_source_files)
-        }
-        second_list_answer = {*first_list_answer, *second_partial_list_answer}
-
-        third_cp_args = list(
-            (peer_names[ind], b'@source_%d_2' % ((ind + 1) % n_peers), b'target_%d_1' % ind, True)
-            for ind, (fname, size) in enumerate(random_source_files)
+            (peer_names[ind], b'@data_%d' % ((ind + 1) % n_peers), b'target_%d' % ((ind + 1) % n_peers), True)
+            for ind in range(n_peers)
         )
 
-        forth_mv_args = list(
-            (peer_names[ind], b'@source_%d_1' % ((ind + n_peers - 1) % n_peers), b'target_%d_2' % ind, True)
-            for ind, (fname, size) in enumerate(random_source_files)
+        verify_file_args = list(
+            (b'target_%d' % ind, '#source_%d' % ind)
+            for ind, (fname, size) in enumerate(source_files)
         )
 
         return await self.run_script(
@@ -286,30 +317,24 @@ class Mp2Test:
             [
                 (TestAction.COMPOUND, *register_file_actions),
                 (TestAction.START_PEER, all_peers),
-                (TestAction.VERIFY_LIST, dict(), all_peers),
 
                 (TestAction.RUN_MV, first_mv_args),
                 (TestAction.SLEEP, 1),
-                (TestAction.VERIFY_LIST, first_list_answer, all_peers),
 
                 (TestAction.RUN_CP, second_cp_args),
                 (TestAction.SLEEP, 1),
-                (TestAction.VERIFY_LIST, second_list_answer, all_peers),
 
-                (TestAction.RUN_MV, third_cp_args),
-                (TestAction.RUN_MV, forth_mv_args),
-
-                # (TestAction.VERIFY_FILE, (b'target.bin', b'#source.bin')),
+                (TestAction.VERIFY_FILE, verify_file_args),
             ]
         )
 
-    async def log_update_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+    async def simple_log_update_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
         resol_name = '{}-resol'.format(self.student_id)
         reep_name = '{}-reep'.format(self.student_id)
         all_peers = [resol_name, reep_name]
 
         return await self.run_script(
-            'log_update_test',
+            'simple_log_update_test',
             due_date,
             all_peers,
             [
@@ -345,6 +370,82 @@ class Mp2Test:
             ]
         )
 
+    async def hard_log_update_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+        n_peers = 5
+
+        while True:
+            peer_names = {n: 'peer_%d' % n for n in range(n_peers)}
+            all_peers = list(peer_names.values())
+
+            if n_peers == len(set(all_peers)):
+                break
+
+        source_files = list(
+            [b'source_%d' % n, random.randint(2 ** 24, 2 ** 26)]
+            for n in range(n_peers)
+        )
+
+        register_file_actions = list(
+            (TestAction.REGISTER_TEST_FILE, fname, None, size)
+            for fname, size in source_files
+        )
+
+        first_mv_args = list(
+            (peer_names[ind], fname, b'@data_%d_1' % ind, True)
+            for ind, (fname, size) in enumerate(source_files)
+        )
+        first_answer = {
+            b'data_%d_1' % ind: b'#%s' % fname
+            for ind, (fname, size) in enumerate(source_files)
+        }
+
+        second_cp_args = list(
+            (peer_names[(ind + n_peers - 1) % n_peers], b'@data_%d_1' % ind, b'@data_%d_2' % ind, True)
+            for ind in range(n_peers)
+        )
+        second_partial_answer = {
+            b'data_%d_2' % ind: b'#%s' % fname
+            for ind, (fname, size) in enumerate(source_files)
+        }
+        second_answer = {*first_answer, *second_partial_answer}
+
+        third_mv_args = list(
+            (peer_names[(ind + 1) % n_peers], b'@data_%d_2' % ((ind + n_peers - 1) % n_peers), b'@data_%d_1' % ind, True)
+            for ind in range(n_peers)
+        )
+        third_answer = {
+            b'data_%d_1' % ((ind + 1) % n_peers): b'#%s' % fname
+            for ind, (fname, size) in enumerate(source_files)
+        }
+
+        return await self.run_script(
+            'hard_log_update_test',
+            due_date,
+            all_peers,
+            [
+                (TestAction.COMPOUND, *register_file_actions),
+                (TestAction.START_PEER, all_peers),
+
+                (TestAction.RUN_MV, first_mv_args),
+                (TestAction.SLEEP, 1),
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, first_answer, all_peers),
+
+                (TestAction.RUN_CP, second_cp_args),
+                (TestAction.SLEEP, 1),
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, second_answer, all_peers),
+
+                (TestAction.RUN_MV, third_mv_args),
+                (TestAction.SLEEP, 1),
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, third_answer, all_peers),
+            ]
+        )
+
     async def run_script(self, test_name, due_date, peer_names, script):
         assert len(peer_names) == len(set(peer_names))
 
@@ -361,14 +462,33 @@ class Mp2Test:
         test_files = dict()
 
         # command processing and utility functions
-        def calc_md5(path):
-            with open(path, 'rb') as file_verify:
-                digester = hashlib.md5()
-                for chunk in iter(lambda: file_verify.read(8192), b''):
-                    digester.update(chunk)
+        async def calc_md5(path):
+            md5sum_proc = await asyncio.create_subprocess_exec(
+                '/usr/bin/env',
+                'md5sum',
+                path,
+                stdin=None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=None,
+            )
+            data = await md5sum_proc.stdout.read()
+            returncode = await md5sum_proc.wait()
+            if returncode != 0:
+                return None
 
-                result_hash = bytes(digester.digest().hex(), 'ASCII')
-                return result_hash
+            assert len(data) > 32
+            return data[:32]
+
+        async def create_random_file(path, size):
+            dd_proc = await asyncio.create_subprocess_shell(
+                b'dd if=/dev/urandom of=%s count=%d iflag=count_bytes status=none' % (path, size),
+                stdin=None,
+                stdout=None,
+                stderr=None,
+            )
+
+            returncode = await dd_proc.wait()
+            assert returncode == 0, 'Failed to create file {} with random content'.format(path)
 
         async def process_verify_list(args):
             expected_answer, names = args
@@ -453,14 +573,12 @@ class Mp2Test:
                         assert self.md5_regex.match(digest) is not None
                         expected_hash = digest
 
-                    try:
-                        result_hash = calc_md5(path)
-                        if result_hash != expected_hash:
-                            return Status.OK, Comment.TEST_FAILED, 'Expect file {} has MD5 {}, but get {}'.format(path, expected_hash, result_hash)
-
-                    except FileNotFoundError as err:
+                    result_hash = await calc_md5(path)
+                    if result_hash is None:
                         logger.info('Expect %s file, but it does not exist', path)
-                        return Status.OK, Comment.TEST_FAILED, err
+                        return Status.OK, Comment.TEST_FAILED, 'Expect {} file, but it does not exist'.format(path)
+                    elif result_hash != expected_hash:
+                        return Status.OK, Comment.TEST_FAILED, 'Expect file {} has MD5 {}, but get {}'.format(path, expected_hash, result_hash)
                 else:
                     if os.path.exists(path):
                         return Status.OK, Comment.TEST_FAILED, "File {} should be deleted, but it's still there."
@@ -532,7 +650,8 @@ class Mp2Test:
                         else:
                             # check if file is illegally touched
                             assert orig_src in test_files
-                            source_hash = calc_md5(real_src)
+                            source_hash = await calc_md5(real_src)
+                            assert source_hash is not None
                             if source_hash != test_files[orig_src]:
                                 return Status.OK, Comment.TEST_FAILED, 'Peer {} illegally modifies the file {}'.format(name, real_src)
 
@@ -541,7 +660,8 @@ class Mp2Test:
                             return Status.OK, Comment.TEST_FAILED, 'File {} does not show up after peer {} runs cp command'.format(real_dst, name)
                         else:
                             # update md5
-                            digest = calc_md5(real_dst)
+                            digest = await calc_md5(real_dst)
+                            assert digest is not None
                             test_files[orig_dst] = digest
                             logger.debug('Automatically register test file %s with hash %s', orig_dst, digest)
 
@@ -596,9 +716,21 @@ class Mp2Test:
                             return Status.OK, Comment.TEST_FAILED, 'File {} does not show up after peer {} runs mv'.format(real_dst, name)
                         else:
                             # update md5
-                            digest = calc_md5(real_dst)
+                            digest = await calc_md5(real_dst)
+                            assert digest is not None
                             test_files[orig_dst] = digest
                             logger.debug('Automatically register test file %s with hash %s', orig_dst, digest)
+
+        async def process_run_rm(args):
+            rm_args = args[0]
+            results_and_errors = await asyncio.gather(
+                *(drivers[peer_name].send_rm(fname) for peer_name, fname in rm_args)
+            )
+
+            for (peer_name, fname), error in zip(rm_args, results_and_errors):
+                if error is not None:
+                    logger.info('Failed to run rm command: %s', error)
+                    return Status.OK, Comment.TEST_FAILED, error
 
         async def process_run_exit(args):
             peer_names = args[0]
@@ -623,27 +755,19 @@ class Mp2Test:
             fname, content, size = args
             path = os.path.join(test_dir_path, fname)
 
-            if content is not None:
+            if content is not None:  # Avoid using this with large content to prevent blocking
                 assert isinstance(content, bytes) and size is None
-
                 with open(path, 'wb') as fo:
                     fo.write(content)
 
-                test_files[fname] = calc_md5(path)
+                test_files[fname] = await calc_md5(path)
+                assert test_files[fname] is not None
 
             else:
                 assert size >= 0
-                offset = 0
-                block_size = 8192
-
-                with open(path, 'wb') as fo:
-                    while offset < size:
-                        written_size = min(block_size, size - offset)
-                        data = os.urandom(written_size)
-                        fo.write(data)
-                        offset += written_size
-
-                test_files[fname] = calc_md5(path)
+                await create_random_file(path, size)
+                test_files[fname] = await calc_md5(path)
+                assert test_files[fname] is not None
 
         async def process_unregister_test_file(args):
             name = args[0]
@@ -716,6 +840,8 @@ class Mp2Test:
                     ret = await process_register_test_file(args)
                 elif action == TestAction.UNREGISTER_TEST_FILE:
                     ret = await process_unregister_test_file(args)
+                elif action == TestAction.RUN_RM:
+                    ret = await process_run_rm(args)
                 else:
                     assert False, 'Undefined test action {}'.format(action)
 
@@ -739,5 +865,5 @@ class Mp2Test:
                 test_dir.cleanup()
 
     def make_random_peer_name(self):
-        suffix = ''.join(random.choices(self.peer_name_charset, k=16))
+        suffix = ''.join(random.choices(self.peer_name_charset, k=8))
         return '{}-{}'.format(self.student_id, suffix)

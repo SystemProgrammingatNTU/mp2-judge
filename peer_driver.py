@@ -69,9 +69,8 @@ class PeerDriver:
             if self.proc.returncode is None:
                 try:
                     self.proc.kill()
-                except OSError as err:
-                    if err.errno != errno.ESRCH:
-                        raise err
+                except ProcessLookupError:
+                    pass
 
             self.proc = None
 
@@ -94,7 +93,7 @@ class PeerDriver:
             stderr=None,
         )
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.1)
 
         # check socket file
         if not os.path.exists(self.socket_path):
@@ -107,7 +106,11 @@ class PeerDriver:
 
         if self.proc is not None:
             if self.proc.returncode is None:
-                self.proc.kill()
+                try:
+                    self.proc.kill()
+                except ProcessLookupError:
+                    pass
+
             self.proc = None
 
         # clean socket file
@@ -164,6 +167,33 @@ class PeerDriver:
 
         return None, None
 
+    async def send_rm(self, fname):
+        assert self.proc is not None, 'Process is not started on list()'
+        assert fname and fname[0] == ord('@')
+
+        try:
+            # send command
+            command = b'rm %s\n' % fname
+            self.logger.info('stdin: %s', command)
+
+            self.proc.stdin.write(command)
+            await self.proc.stdin.drain()
+
+            result, err = await self.scan_stdout(timeout=1.0)
+            if err is not None:
+                return err
+
+            if result:
+                return 'Expect no output from rm command, but get {}'.format(result)
+
+            return None
+
+        except ConnectionResetError as err:
+            self.logger.debug('%s peer process dies early', self.name)
+            return err
+
+        return None
+
     async def send_histoy(self, all_option):
         assert self.proc is not None, 'Process is not started on send_history()'
 
@@ -185,7 +215,7 @@ class PeerDriver:
 
         return self.parse_history_output(result)
 
-    async def send_cp(self, source, target, timeout=30.0):
+    async def send_cp(self, source, target, timeout=120.0):
         assert self.proc is not None, 'Process is not started on send_cp()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
         assert target[0] == ord('@') or os.path.isdir(os.path.dirname(os.path.realpath(target))), 'Malformed target path'
@@ -213,7 +243,7 @@ class PeerDriver:
 
         return None, 'Output {} is not understood'.format(result)
 
-    async def send_mv(self, source, target, timeout=30.0):
+    async def send_mv(self, source, target, timeout=120.0):
         assert self.proc is not None, 'Process is not started on send_mv()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
 

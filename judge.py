@@ -122,7 +122,7 @@ async def judge(args):
         else:
             assert status == Status.OK
             if comment == Comment.PASS:
-                context['score'] += 0.5
+                context['score'] += 1
 
         # test remote file transfer
         test_name = 'simple_remote_transfer_test'
@@ -135,12 +135,63 @@ async def judge(args):
             return
         else:
             assert status == Status.OK
-            if comment == Comment.PASS:
+            pass_simple = comment == Comment.PASS
+            if pass_simple:
                 context['score'] += 0.5
 
+        if pass_simple:
+            # test large file remove transfer
+            test_name = 'hard_remote_transfer_test'
+            status, comment, error = await tester.hard_remote_transfer_test(due_date=due_date)
+            context['comment'][test_name] = comment.value
+            context['error'][test_name] = error
+
+            if status != Status.OK:
+                context['status'] = status
+                return
+            else:
+                assert status == Status.OK
+                if comment == Comment.PASS:
+                    context['score'] += 0.5
+        else:
+            logger.info('The program fails simple_remote_transfer_test, skip harder hard_remote_transfer_test.')
+
         # check if history/list is updated in 0.5 seconds
-        test_name = 'log_update_test'
-        status, comment, error = await tester.log_update_test(due_date=due_date)
+        test_name = 'simple_log_update_test'
+        status, comment, error = await tester.simple_log_update_test(due_date=due_date)
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            pass_simple = comment == Comment.PASS
+            if pass_simple:
+                context['score'] += 0.5
+
+        if pass_simple:
+            # test harder log update
+            test_name = 'hard_log_update_test'
+            status, comment, error = await tester.simple_log_update_test(due_date=due_date)
+            context['comment'][test_name] = comment.value
+            context['error'][test_name] = error
+
+            if status != Status.OK:
+                context['status'] = status
+                return
+            else:
+                assert status == Status.OK
+                if comment == Comment.PASS:
+                    context['score'] += 0.5
+        else:
+            logger.info('The program fails simple_log_update_test, skip harder hard_log_update_test.')
+
+
+        # test if rm command is implemented correctly
+        test_name = 'simple_rm_test'
+        status, comment, error = await tester.simple_rm_test(due_date=due_date)
         context['comment'][test_name] = comment.value
         context['error'][test_name] = error
 
@@ -150,24 +201,7 @@ async def judge(args):
         else:
             assert status == Status.OK
             if comment == Comment.PASS:
-                context['score'] += 0.5
-
-        # all test pass if reaching here
-        context['status'] = Status.OK
-
-        # test large file remove transfer
-        test_name = 'hard_remote_transfer_test'
-        status, comment, error = await tester.hard_remote_transfer_test(due_date=due_date)
-        context['comment'][test_name] = comment.value
-        context['error'][test_name] = error
-
-        if status != Status.OK:
-            context['status'] = status
-            return
-        else:
-            assert status == Status.OK
-            if comment == Comment.PASS:
-                context['score'] += 0.5
+                context['score'] += 2.0
 
         # all test pass if reaching here
         context['status'] = Status.OK
@@ -182,6 +216,10 @@ async def judge(args):
         # assersions
         assert context['status'] is not None
         assert context['comment'] is not None
+
+        # scale score
+        if context['score'] is not None:
+            context['score'] *= 1.5
 
         # write log
         logger.info('status=%s', context['status'].value)
