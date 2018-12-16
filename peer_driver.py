@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import tempfile
 import asyncio
 import logging
@@ -136,15 +137,15 @@ class PeerDriver:
 
             # clean socket file
             if os.path.exists(self.socket_path):
+                self.logger.warning('Socket file %s is not removed when %s peer exits', self.socket_path, self.name)
                 os.unlink(self.socket_path)
-                return False, 'Socket file {} is not removed when peer exits'.format(self.socket_path)
 
             return True, None
 
         except asyncio.TimeoutError:
             return False, 'Peer process does not terminate in {} seconds after exit command'.format(timeout)
 
-    async def send_list(self):
+    async def send_list(self, timeout=0.55):
         assert self.proc is not None, 'Process is not started on list()'
 
         try:
@@ -155,7 +156,7 @@ class PeerDriver:
             self.proc.stdin.write(command)
             await self.proc.stdin.drain()
 
-            result, err = await self.scan_stdout()
+            result, err = await self.scan_stdout(timeout=timeout)
             if err is not None:
                 return None, err
 
@@ -194,7 +195,7 @@ class PeerDriver:
 
         return None
 
-    async def send_histoy(self, all_option):
+    async def send_histoy(self, all_option, timeout=0.55):
         assert self.proc is not None, 'Process is not started on send_history()'
 
         try:
@@ -205,7 +206,7 @@ class PeerDriver:
             self.proc.stdin.write(command)
             await self.proc.stdin.drain()
 
-            result, err = await self.scan_stdout()
+            result, err = await self.scan_stdout(timeout=timeout)
             if err is not None:
                 return None, err
 
@@ -215,7 +216,7 @@ class PeerDriver:
 
         return self.parse_history_output(result)
 
-    async def send_cp(self, source, target, timeout=120.0):
+    async def send_cp(self, source, target, timeout=180.0):
         assert self.proc is not None, 'Process is not started on send_cp()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
         assert target[0] == ord('@') or os.path.isdir(os.path.dirname(os.path.realpath(target))), 'Malformed target path'
@@ -243,7 +244,7 @@ class PeerDriver:
 
         return None, 'Output {} is not understood'.format(result)
 
-    async def send_mv(self, source, target, timeout=120.0):
+    async def send_mv(self, source, target, timeout=180.0):
         assert self.proc is not None, 'Process is not started on send_mv()'
         assert isinstance(source, bytes) and isinstance(target, bytes)
 
@@ -275,10 +276,15 @@ class PeerDriver:
         assert expect_n_lines is None or isinstance(expect_n_lines, int)
 
         result = list()
+        time_limit = time.time() + timeout
 
-        while expect_n_lines is None or len(result) < expect_n_lines:
+        while time.time() < time_limit and \
+              (expect_n_lines is None or len(result) < expect_n_lines):
             try:
-                line = await asyncio.wait_for(self.proc.stdout.readline(), timeout)
+                line = await asyncio.wait_for(
+                    self.proc.stdout.readline(),
+                    max(0.0, time_limit - time.time())
+                )
             except asyncio.TimeoutError:
                 return result, None
 

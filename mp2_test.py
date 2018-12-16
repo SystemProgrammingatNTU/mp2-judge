@@ -1,6 +1,7 @@
 import os
 import asyncio
 import random
+import time
 from enum import Enum
 import tempfile
 import hashlib
@@ -108,7 +109,7 @@ class Mp2Test:
         try:
             os.chdir(self.homework_dir)
         except FileNotFoundError as err:
-            return False, Comment.NOT_SUBMITTED, err
+            return False, Comment.NOT_SUBMITTED, '{} does not exist'.format(self.homework_dir)
 
         return True, None, None
 
@@ -276,19 +277,14 @@ class Mp2Test:
 
     async def hard_remote_transfer_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
         n_peers = 5
-
-        while True:
-            peer_names = {n: 'peer_%d' % n for n in range(n_peers)}
-            all_peers = list(peer_names.values())
-
-            if n_peers == len(set(all_peers)):
-                break
+        peer_names = {n: 'peer_%d' % n for n in range(n_peers)}
+        all_peers = list(peer_names.values())
 
         source_files = list(
             [b'source_%d' % n, random.randint(2 ** 24, 2 ** 26)]
             for n in range(n_peers)
         )
-        source_files[0][1] = 2 ** 30  # at least one peer has 1GB file
+        source_files[0][1] = 2 ** 31  # at least one peer has 2GB file
 
         register_file_actions = list(
             (TestAction.REGISTER_TEST_FILE, fname, None, size)
@@ -315,14 +311,14 @@ class Mp2Test:
             due_date,
             all_peers,
             [
-                (TestAction.COMPOUND, *register_file_actions),
+                (TestAction.COMPOUND, False, *register_file_actions),
                 (TestAction.START_PEER, all_peers),
 
                 (TestAction.RUN_MV, first_mv_args),
-                (TestAction.SLEEP, 1),
+                (TestAction.SLEEP, 20),
 
                 (TestAction.RUN_CP, second_cp_args),
-                (TestAction.SLEEP, 1),
+                (TestAction.SLEEP, 20),
 
                 (TestAction.VERIFY_FILE, verify_file_args),
             ]
@@ -423,7 +419,7 @@ class Mp2Test:
             due_date,
             all_peers,
             [
-                (TestAction.COMPOUND, *register_file_actions),
+                (TestAction.COMPOUND, False, *register_file_actions),
                 (TestAction.START_PEER, all_peers),
 
                 (TestAction.RUN_MV, first_mv_args),
@@ -446,6 +442,79 @@ class Mp2Test:
             ]
         )
 
+    async def simple_concurrency_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+        resol_name = '{}-resol'.format(self.student_id)
+        reep_name = '{}-reep'.format(self.student_id)
+        all_peers = [resol_name, reep_name]
+
+        return await self.run_script(
+            'simple_concurrency_test',
+            due_date,
+            all_peers,
+            [
+                (TestAction.REGISTER_TEST_FILE, b'some_big', None, 2 ** 28),
+                (TestAction.REGISTER_TEST_FILE, b'some_large', None, 2 ** 28),
+                (TestAction.START_PEER, all_peers),
+                (TestAction.SLEEP, 0.55),
+
+                (TestAction.RUN_CP, [(resol_name, b'some_big', b'@biiig', True), (reep_name, b'some_large', b'@laaarge', True)]),
+                (TestAction.SLEEP, 0.55),
+
+                # Run cp commands on two peers
+                # We expect they finish at almost the same time
+                (
+                    TestAction.COMPOUND,
+                    True,
+                    (TestAction.RUN_CP, [(resol_name, b'@laaarge', b'another_large', True)]),
+                    (TestAction.RUN_CP, [(reep_name, b'@biiig', b'another_big', True)]),
+                ),
+
+                (TestAction.VERIFY_FILE, (b'another_big', b'#some_big')),
+                (TestAction.VERIFY_FILE, (b'another_large', b'#some_large')),
+            ]
+        )
+
+    async def simple_restart_test(self, due_date=datetime.datetime(2018, 12, 11, 23, 59)):
+        resol_name = '{}-resol'.format(self.student_id)
+        reep_name = '{}-reep'.format(self.student_id)
+        sf_name = '{}-sf'.format(self.student_id)
+        all_peers = [resol_name, reep_name, sf_name]
+
+        list_answer = {
+            b'gift': b'#resol_gift',
+            b'jewelry': b'#reep_jewelry',
+            b'gold': b'#sf_gold',
+        }
+
+        return await self.run_script(
+            'simple_restart_test',
+            due_date,
+            all_peers,
+            [
+                (TestAction.REGISTER_TEST_FILE, b'resol_gift', None, 4096),
+                (TestAction.REGISTER_TEST_FILE, b'reep_jewelry', None, 4096),
+                (TestAction.REGISTER_TEST_FILE, b'sf_gold', None, 4096),
+                (TestAction.START_PEER, all_peers),
+
+                (TestAction.RUN_MV, [(resol_name, b'resol_gift', b'@gift', True)]),
+                (TestAction.RUN_MV, [(sf_name, b'sf_gold', b'@gold', True)]),
+                (TestAction.SLEEP, 2),
+
+                (TestAction.RUN_EXIT, [(sf_name, False)]), # turn off sf peer
+                (TestAction.SLEEP, 2),
+
+                (TestAction.RUN_MV, [(reep_name, b'reep_jewelry', b'@jewelry', True)]),
+                (TestAction.SLEEP, 2),
+
+                (TestAction.START_PEER, [sf_name]), # turn on sf peer
+                (TestAction.SLEEP, 3),
+
+                (TestAction.VERIFY_HISTORY, all_peers),
+                (TestAction.VERIFY_COMBINED_HISTORY, all_peers),
+                (TestAction.VERIFY_LIST, list_answer, all_peers),
+            ]
+        )
+
     async def run_script(self, test_name, due_date, peer_names, script):
         assert len(peer_names) == len(set(peer_names))
 
@@ -460,6 +529,8 @@ class Mp2Test:
         logger = self.logger.getChild(test_name)
         drivers = OrderedDict()
         test_files = dict()
+
+        logger.info('Start %s test', test_name)
 
         # command processing and utility functions
         async def calc_md5(path):
@@ -481,7 +552,7 @@ class Mp2Test:
 
         async def create_random_file(path, size):
             dd_proc = await asyncio.create_subprocess_shell(
-                b'dd if=/dev/urandom of=%s count=%d iflag=count_bytes status=none' % (path, size),
+                b'dd if=/dev/urandom of=%s count=%d bs=8K iflag=count_bytes status=none' % (path, size),
                 stdin=None,
                 stdout=None,
                 stderr=None,
@@ -804,16 +875,41 @@ class Mp2Test:
                 action = command[0]
                 args = command[1:]
 
+                async def timed_task_wrapper(coro):
+                    begin_time = time.time()
+                    ret = await coro
+                    timing = time.time() - begin_time
+                    return ret, timing
+
                 if action == TestAction.COMPOUND:
-                    results = await asyncio.gather(
-                        *(handle_command(cmd) for cmd in args)
-                    )
-                    error_results = list(filter(lambda ret: ret is not None, results))
+                    assert_same_time = args[0]
+                    cmd_list = args[1:]
+                    assert isinstance(assert_same_time, bool)
 
-                    if error_results:
-                        errors = list(ret[2] for ret in error_results)
-                        return Status.ERROR, Comment.MULTIPLE, errors
+                    if assert_same_time:
+                        timed_results = await asyncio.gather(
+                            *(timed_task_wrapper(handle_command(cmd)) for cmd in cmd_list)
+                        )
+                        error_results = list(
+                            ret for ret, time in timed_results if ret is not None
+                        )
+                        if error_results:
+                            errors = list(ret[2] for ret in error_results)
+                            return Status.ERROR, Comment.MULTIPLE, errors
 
+                        timings = list(time for _, time in timed_results)
+                        timings.sort()
+                        logger.info('Task timings: %s', timings)
+                        if timings and timings[-1] - timings[0] > 1.0:
+                            return Status.OK, Comment.TEST_FAILED, 'Judge assumes tasks finish at almost the same time, but the meeting failed'
+                    else:
+                        results = await asyncio.gather(
+                            *(handle_command(cmd) for cmd in cmd_list)
+                        )
+                        error_results = list(filter(lambda ret: ret is not None, results))
+                        if error_results:
+                            errors = list(ret[2] for ret in error_results)
+                            return Status.ERROR, Comment.MULTIPLE, errors
                     return
 
                 if action == TestAction.VERIFY_LIST:
@@ -863,6 +959,8 @@ class Mp2Test:
 
             if self.auto_clean_tmp:
                 test_dir.cleanup()
+
+            logger.info('Finish %s test', test_name)
 
     def make_random_peer_name(self):
         suffix = ''.join(random.choices(self.peer_name_charset, k=8))

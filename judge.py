@@ -188,7 +188,6 @@ async def judge(args):
         else:
             logger.info('The program fails simple_log_update_test, skip harder hard_log_update_test.')
 
-
         # test if rm command is implemented correctly
         test_name = 'simple_rm_test'
         status, comment, error = await tester.simple_rm_test(due_date=due_date)
@@ -201,7 +200,35 @@ async def judge(args):
         else:
             assert status == Status.OK
             if comment == Comment.PASS:
+                context['score'] += 1.0
+
+        # test if two peers don't block each other
+        test_name = 'simple_concurrency_test'
+        status, comment, error = await tester.simple_concurrency_test(due_date=due_date)
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
                 context['score'] += 2.0
+
+        # test if peer restarts properly
+        test_name = 'simple_restart_test'
+        status, comment, error = await tester.simple_restart_test(due_date=due_date)
+        context['comment'][test_name] = comment.value
+        context['error'][test_name] = error
+
+        if status == Status.ERROR:
+            context['status'] = Status.ERROR
+            return
+        else:
+            assert status == Status.OK
+            if comment == Comment.PASS:
+                context['score'] += 1.0
 
         # all test pass if reaching here
         context['status'] = Status.OK
