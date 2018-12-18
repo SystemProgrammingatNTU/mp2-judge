@@ -281,7 +281,7 @@ class Mp2Test:
         all_peers = list(peer_names.values())
 
         source_files = list(
-            [b'source_%d' % n, random.randint(2 ** 24, 2 ** 26)]
+            [b'source_%d' % n, random.randint(2 ** 10, 2 ** 14)]
             for n in range(n_peers)
         )
         source_files[0][1] = 2 ** 31  # at least one peer has 2GB file
@@ -302,7 +302,7 @@ class Mp2Test:
         )
 
         verify_file_args = list(
-            (b'target_%d' % ind, '#source_%d' % ind)
+            (b'target_%d' % ind, b'#source_%d' % ind)
             for ind, (fname, size) in enumerate(source_files)
         )
 
@@ -315,12 +315,12 @@ class Mp2Test:
                 (TestAction.START_PEER, all_peers),
 
                 (TestAction.RUN_MV, first_mv_args),
-                (TestAction.SLEEP, 20),
+                (TestAction.SLEEP, 120),
 
                 (TestAction.RUN_CP, second_cp_args),
-                (TestAction.SLEEP, 20),
+                (TestAction.SLEEP, 120),
 
-                (TestAction.VERIFY_FILE, verify_file_args),
+                (TestAction.VERIFY_FILE, *verify_file_args),
             ]
         )
 
